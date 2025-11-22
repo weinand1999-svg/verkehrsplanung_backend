@@ -1,0 +1,14 @@
+{
+  "name": "verkehrsplanung-backend",
+  "version": "1.0.0",
+  "description": "Backend für Verkehrsplanungs-Projekte (Lovable → API → KI)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "cors": "^2.8.5"
+  }
+}
