@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 // ------------------------------------------------------
-//  Hilfsfunktionen
+// Hilfsfunktionen
 // ------------------------------------------------------
 
 function toNumber(value, fallback = 0) {
@@ -27,21 +27,19 @@ function toBool(value) {
 
 // ------------------------------------------------------
 //  Basis-Regeln + Standard-spezifische Regelsets
-//  (vereinfachte, technische Ableitungen, anpassbar)
 // ------------------------------------------------------
 
 const BASE_RULES = {
-  sidewalk_min_m: 1.5,          // absolute Mindestbreite Gehweg
-  sidewalk_target_m: 1.8,       // sinnvolle Mindestbreite
-  lane_min_m: 2.75,             // Mindestbreite Fahrstreifen
-  lane_regular_m: 3.25,         // Regelbreite Fahrstreifen innerorts
-  cycle_min_m: 1.5,             // generelles Minimum für Radführung
+  sidewalk_min_m: 1.5,
+  sidewalk_target_m: 1.8,
+  lane_min_m: 2.75,
+  lane_regular_m: 3.25,
+  cycle_min_m: 1.5,
   parking_parallel_min_m: 2.0,
   parking_schraeg_min_m: 2.5,
   parking_quer_min_m: 5.0
 };
 
-// RASt – verstärkt Gehweg, Fahrstreifen, Parken
 const RAST_RULES = {
   sidewalk_min_m: 1.8,
   lane_min_m: 2.75,
@@ -51,258 +49,179 @@ const RAST_RULES = {
   parking_quer_min_m: 5.0
 };
 
-// ERA – verstärkt Radverkehr
 const ERA_RULES = {
   cycle_schutz_min_m: 1.5,
   cycle_radfahr_min_m: 1.85,
   cycle_baulich_min_m: 2.0
 };
 
-// EFA – stärkerer Fokus auf Gehkomfort
 const EFA_RULES = {
   sidewalk_min_m: 1.8,
   sidewalk_target_m: 2.5
 };
 
-// StVO – hier eher Hinweise zu engen Fahrstreifen
 const STVO_RULES = {
   lane_min_m: 2.75,
   lane_regular_m: 3.25
 };
 
-// Hilfsfunktion: Regeln zusammenführen
+// Regeln zusammenführen
 function buildRules(standards) {
   let rules = { ...BASE_RULES };
 
-  if (standards.applyRast) {
-    rules = { ...rules, ...RAST_RULES };
-  }
-  if (standards.applyEfa) {
-    rules = { ...rules, ...EFA_RULES };
-  }
+  if (standards.applyRast) rules = { ...rules, ...RAST_RULES };
+  if (standards.applyEfa) rules = { ...rules, ...EFA_RULES };
   if (standards.applyStvo) {
-    rules = {
-      ...rules,
-      lane_min_m: Math.max(rules.lane_min_m, STVO_RULES.lane_min_m),
-      lane_regular_m: Math.max(rules.lane_regular_m, STVO_RULES.lane_regular_m)
-    };
+    rules.lane_min_m = Math.max(rules.lane_min_m, STVO_RULES.lane_min_m);
+    rules.lane_regular_m = Math.max(
+      rules.lane_regular_m,
+      STVO_RULES.lane_regular_m
+    );
   }
+
   if (standards.applyEra) {
-    // Falls noch keine speziellen ERA-Regeln gesetzt sind, hinzufügen
     rules.cycle_schutz_min_m = ERA_RULES.cycle_schutz_min_m;
     rules.cycle_radfahr_min_m = ERA_RULES.cycle_radfahr_min_m;
     rules.cycle_baulich_min_m = ERA_RULES.cycle_baulich_min_m;
   } else {
-    // Fallback, falls kein ERA aktiv: verwende BASE cycle_min als generisches Minimum
-    rules.cycle_schutz_min_m = rules.cycle_min_m;
-    rules.cycle_radfahr_min_m = Math.max(rules.cycle_min_m, 1.8);
-    rules.cycle_baulich_min_m = Math.max(rules.cycle_min_m, 2.0);
+    rules.cycle_schutz_min_m = 1.5;
+    rules.cycle_radfahr_min_m = 1.85;
+    rules.cycle_baulich_min_m = 2.0;
   }
 
   return rules;
 }
 
 // ------------------------------------------------------
-//  Validierung: wendet kombinierte Regeln auf ein Design an
+// Validierung Hauptfunktion
 // ------------------------------------------------------
 
 function validateDesignWithStandards(data, standards) {
   const errors = [];
-
-  // kombinierte Regeln aus RASt/ERA/EFA/StVO
   const RULES = buildRules(standards);
 
-  // --------- 1. Eingabewerte auslesen ---------
+  // ---------- FORMULARMAPPING (WICHTIGSTE STELLE!) ----------
 
-  const totalWidthM     = toNumber(data.totalWidthM ?? data.total_width_m);
-  const sidewalkLeftM   = toNumber(data.sidewalkLeftM ?? data.sidewalk_left_m);
-  const sidewalkRightM  = toNumber(data.sidewalkRightM ?? data.sidewalk_right_m);
-  const lanesCount      = toNumber(data.lanesCount ?? data.lanes_count);
-  const busTraffic      = toBool(data.bus ?? data.busTraffic);
+  const totalWidthM = toNumber(data.gesamtbreite);
+  const sidewalkLeftM = toNumber(data.gehwegLinks);
+  const sidewalkRightM = toNumber(data.gehwegRechts);
 
-  const cycleNeeded     = toBool(data.cycleNeeded ?? data.cycle_needed);
-  const cycleType       = (data.cycleType ?? data.cycle_type ?? "").toLowerCase(); // "schutzstreifen" | "radfahrstreifen" | "baulicher_radweg"
-  const cycleSides      = (data.cycleSides ?? data.cycle_sides ?? "").toLowerCase(); // "einseitig" | "beidseitig"
+  const lanesCount = toNumber(data.fahrstreifen);
+  const busTraffic = toBool(data.busverkehr);
 
-  const parkingNeeded   = toBool(data.parkingNeeded ?? data.parking_needed);
-  const parkingType     = (data.parkingType ?? data.parking_type ?? "").toLowerCase(); // "parallel" | "schraeg" | "quer"
+  const cycleNeeded = toBool(data.radverkehrGewuenscht);
+  const cycleType = (data.radverkehrArt ?? "").toLowerCase();
+  const cycleSides = (data.radverkehrFuehrung ?? "").toLowerCase();
 
-  // --------- 2. Pflichtfelder prüfen ---------
+  const parkingNeeded = toBool(data.parkstaendeGewuenscht);
+  const parkingType = (data.parkart ?? "").toLowerCase();
 
-  if (!totalWidthM) {
-    errors.push("Gesamtbreite des Straßenraums fehlt oder ist 0.");
-  }
+  // ---------- Pflichtfelder ----------
 
-  if (!lanesCount) {
-    errors.push("Bitte geben Sie die Anzahl der Fahrstreifen an.");
-  }
+  if (!totalWidthM) errors.push("Gesamtbreite fehlt oder ist ungültig.");
+  if (!lanesCount) errors.push("Anzahl der Fahrstreifen nicht angegeben.");
 
   if (errors.length > 0) {
-    return {
-      ok: false,
-      errors,
-      summary: {
-        totalWidthM,
-        sidewalkLeftM,
-        sidewalkRightM,
-        lanesCount
-      }
-    };
+    return { ok: false, errors, summary: {} };
   }
 
-  // --------- 3. Gehwege prüfen ---------
+  // ---------- Gehwege ----------
 
-  if (sidewalkLeftM && sidewalkLeftM < RULES.sidewalk_min_m) {
+  if (sidewalkLeftM < RULES.sidewalk_min_m)
     errors.push(
-      `Linker Gehweg ist mit ${sidewalkLeftM.toFixed(2)} m schmaler als die Mindestbreite von ${RULES.sidewalk_min_m.toFixed(
-        2
-      )} m.`
+      `Linker Gehweg zu schmal (${sidewalkLeftM} m < ${RULES.sidewalk_min_m} m).`
     );
-  }
 
-  if (sidewalkRightM && sidewalkRightM < RULES.sidewalk_min_m) {
+  if (sidewalkRightM < RULES.sidewalk_min_m)
     errors.push(
-      `Rechter Gehweg ist mit ${sidewalkRightM.toFixed(2)} m schmaler als die Mindestbreite von ${RULES.sidewalk_min_m.toFixed(
-        2
-      )} m.`
+      `Rechter Gehweg zu schmal (${sidewalkRightM} m < ${RULES.sidewalk_min_m} m).`
     );
-  }
 
-  const effectiveSidewalkLeftM  = sidewalkLeftM  || RULES.sidewalk_min_m;
-  const effectiveSidewalkRightM = sidewalkRightM || RULES.sidewalk_min_m;
-  const sidewalkTotalM          = effectiveSidewalkLeftM + effectiveSidewalkRightM;
+  const sidewalkTotalM = sidewalkLeftM + sidewalkRightM;
 
-  // --------- 4. Radverkehr Breitenbedarf ---------
+  // ---------- Radverkehr ----------
 
-  let cycleWidthPerSideM = 0;
-
+  let cycleWidthPerSide = 0;
   if (cycleNeeded) {
-    if (cycleType === "schutzstreifen") {
-      cycleWidthPerSideM = RULES.cycle_schutz_min_m;
-    } else if (cycleType === "radfahrstreifen") {
-      cycleWidthPerSideM = RULES.cycle_radfahr_min_m;
-    } else {
-      // baulicher Radweg oder unbekannt
-      cycleWidthPerSideM = RULES.cycle_baulich_min_m;
-    }
+    if (cycleType === "schutzstreifen")
+      cycleWidthPerSide = RULES.cycle_schutz_min_m;
+    else if (cycleType === "radfahrstreifen")
+      cycleWidthPerSide = RULES.cycle_radfahr_min_m;
+    else cycleWidthPerSide = RULES.cycle_baulich_min_m;
   }
 
-  let cycleSidesCount = 0;
-  if (cycleNeeded) {
-    if (cycleSides === "beidseitig") {
-      cycleSidesCount = 2;
-    } else {
-      cycleSidesCount = 1; // Standard: einseitig
-    }
-  }
+  const cycleSidesCount = cycleSides === "beidseitig" ? 2 : 1;
+  const cycleTotalM = cycleWidthPerSide * (cycleNeeded ? cycleSidesCount : 0);
 
-  const cycleTotalMinWidthM = cycleWidthPerSideM * cycleSidesCount;
+  // ---------- Parken ----------
 
-  // --------- 5. Parken Breitenbedarf ---------
-
-  let parkingMinWidthM = 0;
-
+  let parkingM = 0;
   if (parkingNeeded) {
-    if (parkingType === "parallel") {
-      parkingMinWidthM = RULES.parking_parallel_min_m;
-    } else if (parkingType === "schraeg") {
-      parkingMinWidthM = RULES.parking_schraeg_min_m;
-    } else if (parkingType === "quer") {
-      parkingMinWidthM = RULES.parking_quer_min_m;
-    } else {
-      parkingMinWidthM = RULES.parking_parallel_min_m;
-    }
+    if (parkingType === "parallel") parkingM = RULES.parking_parallel_min_m;
+    else if (parkingType === "schraeg") parkingM = RULES.parking_schraeg_min_m;
+    else if (parkingType === "quer") parkingM = RULES.parking_quer_min_m;
   }
 
-  // --------- 6. Fahrstreifenbreite / Gesamtbreite ---------
+  // ---------- Mindestbreite berechnen ----------
 
-  const lanesMinWidthM = lanesCount * RULES.lane_min_m;
-  const lanesRegularWidthM = lanesCount * RULES.lane_regular_m;
+  const lanesMin = lanesCount * RULES.lane_min_m;
 
-  const requiredMinWidthM =
-    sidewalkTotalM +
-    cycleTotalMinWidthM +
-    parkingMinWidthM +
-    lanesMinWidthM;
+  const requiredMin =
+    sidewalkTotalM + cycleTotalM + parkingM + lanesMin;
 
-  if (requiredMinWidthM > totalWidthM) {
+  if (requiredMin > totalWidthM)
     errors.push(
-      `Die gewünschte Anordnung überschreitet die verfügbare Straßenbreite. Verfügbar: ${totalWidthM.toFixed(
+      `Benötigte Breite ${requiredMin.toFixed(
         2
-      )} m, Mindestbedarf nach gewählten Richtlinien: ${requiredMinWidthM.toFixed(2)} m.`
+      )} m > verfügbare Breite ${totalWidthM.toFixed(2)} m.`
     );
-  }
 
-  // Wie viel bleibt für die Fahrstreifen übrig?
-  const availableForLanesBikeParking =
-    totalWidthM - sidewalkTotalM;
+  // ---------- Fahrstreifenprüfung ----------
 
-  const perLaneWidthApprox =
-    (availableForLanesBikeParking - cycleTotalMinWidthM - parkingMinWidthM) /
-    (lanesCount || 1);
+  const widthForLanes =
+    totalWidthM - (sidewalkTotalM + cycleTotalM + parkingM);
 
-  if (perLaneWidthApprox && perLaneWidthApprox < RULES.lane_min_m) {
+  const approxLaneWidth = widthForLanes / lanesCount;
+
+  if (approxLaneWidth < RULES.lane_min_m)
     errors.push(
-      `Die voraussichtliche Fahrstreifenbreite liegt mit ca. ${perLaneWidthApprox.toFixed(
+      `Fahrstreifen zu schmal: ca. ${approxLaneWidth.toFixed(
         2
-      )} m unter der Mindestbreite von ${RULES.lane_min_m.toFixed(2)} m.`
+      )} m < Mindestbreite ${RULES.lane_min_m} m.`
     );
-  } else if (perLaneWidthApprox && perLaneWidthApprox < lanesRegularWidthM) {
-    errors.push(
-      `Hinweis: Die voraussichtliche Fahrstreifenbreite liegt mit ca. ${perLaneWidthApprox.toFixed(
-        2
-      )} m unter der Regelbreite von ${lanesRegularWidthM.toFixed(
-        2
-      )} m, erfüllt aber ggf. noch Mindestanforderungen.`
-    );
-  }
 
-  if (busTraffic && perLaneWidthApprox && perLaneWidthApprox < RULES.lane_regular_m) {
+  if (
+    busTraffic &&
+    approxLaneWidth < RULES.lane_regular_m
+  )
     errors.push(
-      `Hinweis: Für Linienbusverkehr wird in der Regel eine Fahrstreifenbreite von mindestens ${RULES.lane_regular_m.toFixed(
-        2
-      )} m empfohlen. Die voraussichtliche Breite liegt darunter.`
+      `Für Busverkehr empfohlen: mind. ${RULES.lane_regular_m} m Fahrstreifenbreite.`
     );
-  }
 
-  const summary = {
-    input: {
-      totalWidthM,
-      sidewalkLeftM,
-      sidewalkRightM,
-      lanesCount,
-      cycleNeeded,
-      cycleType,
-      cycleSides,
-      parkingNeeded,
-      parkingType,
-      busTraffic
-    },
-    computed: {
-      sidewalkTotalM,
-      cycleTotalMinWidthM,
-      parkingMinWidthM,
-      lanesMinWidthM,
-      requiredMinWidthM,
-      perLaneWidthApprox
-    },
-    rules: RULES,
-    standardsApplied: standards
-  };
+  // ---------- Ergebnis ----------
 
   return {
     ok: errors.length === 0,
     errors,
-    summary
+    summary: {
+      sidewalks: { sidewalkLeftM, sidewalkRightM },
+      cycle: { cycleNeeded, cycleType, cycleSides, cycleTotalM },
+      parking: { parkingNeeded, parkingType, parkingM },
+      lanes: { lanesCount, approxLaneWidth },
+      requiredMin,
+      totalWidthM
+    },
+    rules: RULES,
+    standardsApplied: standards
   };
 }
 
 // ------------------------------------------------------
-//  Routen
+// Routes
 // ------------------------------------------------------
 
 app.get("/", (req, res) => {
-  res.send("Verkehrsplanung-Backend mit RASt, ERA, EFA und StVO-Logik läuft 🚦");
+  res.send("Backend läuft mit RASt + ERA + EFA + StVO 🚦");
 });
 
 app.post("/api/verkehrsplanung", (req, res) => {
@@ -311,47 +230,20 @@ app.post("/api/verkehrsplanung", (req, res) => {
   console.log("Neue Verkehrsplanungs-Anfrage empfangen:");
   console.log(JSON.stringify(data, null, 2));
 
-  // Standards aus den Formulardaten ermitteln
   const standards = {
-    applyRast:
-      toBool(data.RASt) ||
-      toBool(data.rast) ||
-      toBool(data.applyRast),
-    applyEra:
-      toBool(data.ERA) ||
-      toBool(data.era) ||
-      toBool(data.applyEra),
-    applyEfa:
-      toBool(data.EFA) ||
-      toBool(data.efa) ||
-      toBool(data.applyEfa),
-    applyStvo:
-      toBool(data.StVO) ||
-      toBool(data.stvo) ||
-      toBool(data.applyStvo)
+    applyRast: toBool(data.rast),
+    applyEra: toBool(data.era),
+    applyEfa: toBool(data.efa),
+    applyStvo: toBool(data.stvo)
   };
-
-  // Falls gar keine Richtlinie ausgewählt ist -> nur Empfang bestätigen
-  if (
-    !standards.applyRast &&
-    !standards.applyEra &&
-    !standards.applyEfa &&
-    !standards.applyStvo
-  ) {
-    return res.json({
-      status: "ok",
-      message: "Anfrage empfangen (ohne aktivierte Richtlinien).",
-      standardsApplied: standards
-    });
-  }
 
   const result = validateDesignWithStandards(data, standards);
 
   if (!result.ok) {
     return res.status(400).json({
       status: "error",
-      message: "Die Anfrage erfüllt nicht alle Anforderungen der gewählten Richtlinien (vereinfachte Prüfung).",
-      standardsApplied: standards,
+      message:
+        "Die Anfrage erfüllt nicht die Anforderungen der gewählten Richtlinien.",
       errors: result.errors,
       summary: result.summary
     });
@@ -359,8 +251,7 @@ app.post("/api/verkehrsplanung", (req, res) => {
 
   return res.json({
     status: "ok",
-    message: "Anfrage entspricht den vereinfachten Mindestanforderungen der gewählten Richtlinien.",
-    standardsApplied: standards,
+    message: "Alle ausgewählten Richtlinien erfüllt.",
     summary: result.summary
   });
 });
@@ -368,3 +259,4 @@ app.post("/api/verkehrsplanung", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
 });
+
