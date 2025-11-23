@@ -25,6 +25,11 @@ function toBool(value) {
   return false;
 }
 
+// Fehler-Helfer: immer Feld + Nachricht
+function addError(errors, field, message) {
+  errors.push({ field, message });
+}
+
 // ------------------------------------------------------
 //  Basis-Regeln + Standard-spezifische Regelsets
 // ------------------------------------------------------
@@ -100,7 +105,7 @@ function validateDesignWithStandards(data, standards) {
   const errors = [];
   const RULES = buildRules(standards);
 
-  // ---------- FORMULARMAPPING (WICHTIGSTE STELLE!) ----------
+  // ---------- Formularmapping (deine Feldnamen) ----------
 
   const totalWidthM = toNumber(data.gesamtbreite);
   const sidewalkLeftM = toNumber(data.gehwegLinks);
@@ -110,16 +115,26 @@ function validateDesignWithStandards(data, standards) {
   const busTraffic = toBool(data.busverkehr);
 
   const cycleNeeded = toBool(data.radverkehrGewuenscht);
-  const cycleType = (data.radverkehrArt ?? "").toLowerCase();
-  const cycleSides = (data.radverkehrFuehrung ?? "").toLowerCase();
+  const cycleType = (data.radverkehrArt ?? "").toLowerCase();       // "baulich", "schutzstreifen", ...
+  const cycleSides = (data.radverkehrFuehrung ?? "").toLowerCase(); // "einseitig", "beidseitig"
 
   const parkingNeeded = toBool(data.parkstaendeGewuenscht);
-  const parkingType = (data.parkart ?? "").toLowerCase();
+  const parkingType = (data.parkart ?? "").toLowerCase();           // "parallel", "schraeg", "quer"
 
   // ---------- Pflichtfelder ----------
 
-  if (!totalWidthM) errors.push("Gesamtbreite fehlt oder ist ungültig.");
-  if (!lanesCount) errors.push("Anzahl der Fahrstreifen nicht angegeben.");
+  if (!totalWidthM) {
+    addError(errors, "gesamtbreite", "Bitte geben Sie die Gesamtbreite des Straßenraums an.");
+  }
+  if (!lanesCount) {
+    addError(errors, "fahrstreifen", "Bitte geben Sie die Anzahl der Fahrstreifen an.");
+  }
+  if (!sidewalkLeftM) {
+    addError(errors, "gehwegLinks", "Bitte geben Sie die Breite des linken Gehwegs an.");
+  }
+  if (!sidewalkRightM) {
+    addError(errors, "gehwegRechts", "Bitte geben Sie die Breite des rechten Gehwegs an.");
+  }
 
   if (errors.length > 0) {
     return { ok: false, errors, summary: {} };
@@ -127,15 +142,21 @@ function validateDesignWithStandards(data, standards) {
 
   // ---------- Gehwege ----------
 
-  if (sidewalkLeftM < RULES.sidewalk_min_m)
-    errors.push(
-      `Linker Gehweg zu schmal (${sidewalkLeftM} m < ${RULES.sidewalk_min_m} m).`
+  if (sidewalkLeftM < RULES.sidewalk_min_m) {
+    addError(
+      errors,
+      "gehwegLinks",
+      `Linker Gehweg ist mit ${sidewalkLeftM} m schmaler als die Mindestbreite von ${RULES.sidewalk_min_m} m.`
     );
+  }
 
-  if (sidewalkRightM < RULES.sidewalk_min_m)
-    errors.push(
-      `Rechter Gehweg zu schmal (${sidewalkRightM} m < ${RULES.sidewalk_min_m} m).`
+  if (sidewalkRightM < RULES.sidewalk_min_m) {
+    addError(
+      errors,
+      "gehwegRechts",
+      `Rechter Gehweg ist mit ${sidewalkRightM} m schmaler als die Mindestbreite von ${RULES.sidewalk_min_m} m.`
     );
+  }
 
   const sidewalkTotalM = sidewalkLeftM + sidewalkRightM;
 
@@ -143,15 +164,22 @@ function validateDesignWithStandards(data, standards) {
 
   let cycleWidthPerSide = 0;
   if (cycleNeeded) {
-    if (cycleType === "schutzstreifen")
+    if (cycleType === "schutzstreifen") {
       cycleWidthPerSide = RULES.cycle_schutz_min_m;
-    else if (cycleType === "radfahrstreifen")
+    } else if (cycleType === "radfahrstreifen") {
       cycleWidthPerSide = RULES.cycle_radfahr_min_m;
-    else cycleWidthPerSide = RULES.cycle_baulich_min_m;
+    } else {
+      cycleWidthPerSide = RULES.cycle_baulich_min_m;
+    }
   }
 
-  const cycleSidesCount = cycleSides === "beidseitig" ? 2 : 1;
-  const cycleTotalM = cycleWidthPerSide * (cycleNeeded ? cycleSidesCount : 0);
+  const cycleSidesCount = cycleNeeded
+    ? cycleSides === "beidseitig"
+      ? 2
+      : 1
+    : 0;
+
+  const cycleTotalM = cycleWidthPerSide * cycleSidesCount;
 
   // ---------- Parken ----------
 
@@ -165,40 +193,40 @@ function validateDesignWithStandards(data, standards) {
   // ---------- Mindestbreite berechnen ----------
 
   const lanesMin = lanesCount * RULES.lane_min_m;
+  const requiredMin = sidewalkTotalM + cycleTotalM + parkingM + lanesMin;
 
-  const requiredMin =
-    sidewalkTotalM + cycleTotalM + parkingM + lanesMin;
-
-  if (requiredMin > totalWidthM)
-    errors.push(
-      `Benötigte Breite ${requiredMin.toFixed(
+  if (requiredMin > totalWidthM) {
+    addError(
+      errors,
+      "gesamtbreite",
+      `Die gewünschte Aufteilung benötigt mindestens ${requiredMin.toFixed(
         2
-      )} m > verfügbare Breite ${totalWidthM.toFixed(2)} m.`
+      )} m, verfügbar sind aber nur ${totalWidthM.toFixed(2)} m.`
     );
+  }
 
   // ---------- Fahrstreifenprüfung ----------
 
-  const widthForLanes =
-    totalWidthM - (sidewalkTotalM + cycleTotalM + parkingM);
-
+  const widthForLanes = totalWidthM - (sidewalkTotalM + cycleTotalM + parkingM);
   const approxLaneWidth = widthForLanes / lanesCount;
 
-  if (approxLaneWidth < RULES.lane_min_m)
-    errors.push(
-      `Fahrstreifen zu schmal: ca. ${approxLaneWidth.toFixed(
+  if (approxLaneWidth < RULES.lane_min_m) {
+    addError(
+      errors,
+      "fahrstreifen",
+      `Die voraussichtliche Fahrstreifenbreite liegt mit ca. ${approxLaneWidth.toFixed(
         2
-      )} m < Mindestbreite ${RULES.lane_min_m} m.`
+      )} m unter der Mindestbreite von ${RULES.lane_min_m} m.`
     );
+  }
 
-  if (
-    busTraffic &&
-    approxLaneWidth < RULES.lane_regular_m
-  )
-    errors.push(
-      `Für Busverkehr empfohlen: mind. ${RULES.lane_regular_m} m Fahrstreifenbreite.`
+  if (busTraffic && approxLaneWidth < RULES.lane_regular_m) {
+    addError(
+      errors,
+      "fahrstreifen",
+      `Für Busverkehr wird in der Regel eine Fahrstreifenbreite von mindestens ${RULES.lane_regular_m} m empfohlen.`
     );
-
-  // ---------- Ergebnis ----------
+  }
 
   return {
     ok: errors.length === 0,
@@ -259,4 +287,3 @@ app.post("/api/verkehrsplanung", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
 });
-
